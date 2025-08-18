@@ -7,6 +7,10 @@ class AnkiApp {
         this.currentCardIndex = 0;
         this.isStudying = false;
         this.uploadedImagePath = null;
+        this.cardBrowserActive = false;
+        this.currentFilter = 'all';
+        this.searchQuery = '';
+        this.selectedCardId = null;
         
         this.init();
     }
@@ -314,7 +318,7 @@ class AnkiApp {
             // Add to sidebar deck list
             const deckItem = document.createElement('li');
             deckItem.className = 'deck-item';
-            deckItem.onclick = () => this.selectDeck(deck);
+            deckItem.onclick = (event) => this.selectDeck(deck, event);
             deckItem.innerHTML = `
                 <div class="deck-name">${deck.name}</div>
                 <div class="deck-count">${cardCount} cards</div>
@@ -329,14 +333,19 @@ class AnkiApp {
         });
     }
 
-    selectDeck(deck) {
+    selectDeck(deck, event) {
         this.currentDeck = deck;
         
         // Update active state
         document.querySelectorAll('.deck-item').forEach(item => {
             item.classList.remove('active');
         });
-        event.currentTarget.classList.add('active');
+        if (event && event.currentTarget) {
+            event.currentTarget.classList.add('active');
+        }
+
+        // Show card browser
+        this.showCardBrowser();
 
         // Update content
         document.getElementById('contentTitle').textContent = deck.name;
@@ -344,6 +353,11 @@ class AnkiApp {
     }
 
     showDeckView(deck) {
+        // Ensure card browser is shown
+        if (!this.cardBrowserActive) {
+            this.showCardBrowser();
+        }
+        
         const deckCards = this.cards.filter(card => card.deckId === deck.id);
         const mainContent = document.getElementById('mainContent');
 
@@ -396,6 +410,14 @@ class AnkiApp {
     }
 
     showWelcomeView() {
+        // Close card browser if it's open
+        if (this.cardBrowserActive) {
+            this.closeCardBrowser();
+        }
+        
+        // Reset current deck
+        this.currentDeck = null;
+        
         const mainContent = document.getElementById('mainContent');
         mainContent.innerHTML = `
             <div style="text-align: center; padding: 60px 20px;">
@@ -418,6 +440,14 @@ class AnkiApp {
     }
 
     showStatsView() {
+        // Close card browser if it's open
+        if (this.cardBrowserActive) {
+            this.closeCardBrowser();
+        }
+        
+        // Reset current deck
+        this.currentDeck = null;
+        
         const mainContent = document.getElementById('mainContent');
         document.getElementById('contentTitle').textContent = 'Statistics';
         
@@ -509,7 +539,7 @@ class AnkiApp {
                 document.getElementById('deckDescription').value = '';
                 
                 // Select the new deck
-                this.selectDeck(newDeck);
+                this.selectDeck(newDeck, null);
             } else {
                 const errorText = await response.text();
                 console.error('Server error:', errorText);
@@ -618,9 +648,13 @@ class AnkiApp {
             this.uploadedImagePath = null;
             this.occlusions = [];
             
-            // Refresh current view
+            // Refresh current view and card browser
             if (this.currentDeck) {
                 this.showDeckView(this.currentDeck);
+                if (this.cardBrowserActive) {
+                    this.populateCardBrowser();
+                    this.updateBrowserStats();
+                }
             }
             
         } catch (error) {
@@ -796,6 +830,11 @@ class AnkiApp {
         this.isStudying = false;
         this.updateStats();
         
+        // Close card browser if it's open
+        if (this.cardBrowserActive) {
+            this.closeCardBrowser();
+        }
+        
         if (this.currentDeck) {
             this.showDeckView(this.currentDeck);
         } else {
@@ -869,6 +908,238 @@ class AnkiApp {
         // Hide all occlusions to reveal the answer
         this.occlusionsVisible = false;
         this.redrawStudyCanvas();
+    }
+
+    // Card Browser Methods
+    showCardBrowser() {
+        if (!this.currentDeck) return;
+        
+        this.cardBrowserActive = true;
+        document.getElementById('cardBrowser').classList.add('active');
+        document.getElementById('mainContentContainer').classList.add('with-browser');
+        this.populateCardBrowser();
+        this.updateBrowserStats();
+    }
+
+    closeCardBrowser() {
+        this.cardBrowserActive = false;
+        document.getElementById('cardBrowser').classList.remove('active');
+        document.getElementById('mainContentContainer').classList.remove('with-browser');
+        this.selectedCardId = null;
+    }
+
+    populateCardBrowser() {
+        if (!this.currentDeck) return;
+        
+        const deckCards = this.cards.filter(card => card.deckId === this.currentDeck.id);
+        const browserCardList = document.getElementById('browserCardList');
+        
+        if (deckCards.length === 0) {
+            browserCardList.innerHTML = `
+                <div style="text-align: center; padding: 20px; color: #6c757d;">
+                    <i class="fas fa-inbox" style="font-size: 2rem; margin-bottom: 10px;"></i>
+                    <p>No cards in this deck</p>
+                </div>
+            `;
+            return;
+        }
+
+        const filteredCards = this.getFilteredCards(deckCards);
+        
+        if (filteredCards.length === 0) {
+            let message = 'No cards found';
+            if (this.searchQuery) {
+                message = `No cards match "${this.searchQuery}"`;
+            } else if (this.currentFilter !== 'all') {
+                message = `No ${this.currentFilter} cards found`;
+            }
+            
+            browserCardList.innerHTML = `
+                <div style="text-align: center; padding: 20px; color: #6c757d;">
+                    <i class="fas fa-search" style="font-size: 2rem; margin-bottom: 10px;"></i>
+                    <p>${message}</p>
+                    <p style="font-size: 0.8rem; margin-top: 10px;">Try adjusting your search or filters</p>
+                </div>
+            `;
+        } else {
+            const cardsHtml = filteredCards.map(card => this.renderBrowserCardItem(card)).join('');
+            browserCardList.innerHTML = cardsHtml;
+        }
+    }
+
+    renderBrowserCardItem(card) {
+        const cardTypeClass = card.type === 'image-occlusion' ? 'image-occlusion' : '';
+        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
+        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
+        const isSelected = this.selectedCardId === card.id ? 'selected' : '';
+
+        return `
+            <div class="browser-card-item ${isSelected}" onclick="ankiApp.selectBrowserCard('${card.id}')">
+                <div class="browser-card-front">${card.front || 'Image Occlusion Card'}</div>
+                <div class="browser-card-back">${card.back || 'Answer'}</div>
+                <div class="browser-card-meta">
+                    <span class="browser-card-type ${cardTypeClass}">${card.type}</span>
+                    <div>
+                        <div>Last: ${lastReviewed}</div>
+                        <div>Next: ${nextReview}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    selectBrowserCard(cardId) {
+        this.selectedCardId = cardId;
+        this.populateCardBrowser(); // Re-render to show selection
+        
+        // Find the selected card and show its details in the main content
+        const selectedCard = this.cards.find(card => card.id === cardId);
+        if (selectedCard) {
+            this.showCardDetails(selectedCard);
+        }
+    }
+
+    showCardDetails(card) {
+        const mainContent = document.getElementById('mainContent');
+        document.getElementById('contentTitle').textContent = `Card Details: ${card.front || 'Image Occlusion'}`;
+        
+        const cardTypeClass = card.type === 'image-occlusion' ? 'image-occlusion' : '';
+        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
+        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
+
+        let imageContent = '';
+        if (card.imagePath) {
+            imageContent = `
+                <div style="margin: 20px 0;">
+                    <img src="${card.imagePath}" alt="Card image" style="max-width: 100%; height: auto; border-radius: 8px;">
+                </div>
+            `;
+        }
+
+        mainContent.innerHTML = `
+            <div class="card-item" style="max-width: 800px; margin: 0 auto;">
+                <div class="card-front">${card.front || 'Image Occlusion Card'}</div>
+                <div class="card-back">${card.back || 'Answer'}</div>
+                ${imageContent}
+                <div class="card-meta">
+                    <span class="card-type ${cardTypeClass}">${card.type}</span>
+                    <div>
+                        <div>Last reviewed: ${lastReviewed}</div>
+                        <div>Next review: ${nextReview}</div>
+                    </div>
+                </div>
+                <div style="margin-top: 20px; text-align: center;">
+                    <button class="btn btn-primary" onclick="ankiApp.editCard('${card.id}')">
+                        <i class="fas fa-edit"></i> Edit Card
+                    </button>
+                    <button class="btn btn-secondary" onclick="ankiApp.deleteCard('${card.id}')">
+                        <i class="fas fa-trash"></i> Delete Card
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+
+    getFilteredCards(deckCards) {
+        let filtered = deckCards;
+
+        // Apply search filter
+        if (this.searchQuery) {
+            const query = this.searchQuery.toLowerCase();
+            filtered = filtered.filter(card => 
+                (card.front && card.front.toLowerCase().includes(query)) ||
+                (card.back && card.back.toLowerCase().includes(query))
+            );
+        }
+
+        // Apply type filter
+        switch (this.currentFilter) {
+            case 'due':
+                const now = new Date();
+                filtered = filtered.filter(card => 
+                    !card.nextReview || new Date(card.nextReview) <= now
+                );
+                break;
+            case 'new':
+                filtered = filtered.filter(card => !card.lastReviewed);
+                break;
+            case 'image-occlusion':
+                filtered = filtered.filter(card => card.type === 'image-occlusion');
+                break;
+            case 'all':
+            default:
+                break;
+        }
+
+        return filtered;
+    }
+
+    filterCards() {
+        this.searchQuery = document.getElementById('browserSearch').value;
+        this.populateCardBrowser();
+        this.updateBrowserStats();
+    }
+
+    setFilter(filter) {
+        this.currentFilter = filter;
+        
+        // Update active filter button
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.querySelector(`[data-filter="${filter}"]`).classList.add('active');
+        
+        this.populateCardBrowser();
+        this.updateBrowserStats();
+    }
+
+    updateBrowserStats() {
+        if (!this.currentDeck) return;
+        
+        const deckCards = this.cards.filter(card => card.deckId === this.currentDeck.id);
+        const filteredCards = this.getFilteredCards(deckCards);
+        const totalCards = deckCards.length;
+        const dueCards = deckCards.filter(card => {
+            return !card.nextReview || new Date(card.nextReview) <= new Date();
+        }).length;
+        const newCards = deckCards.filter(card => !card.lastReviewed).length;
+        const imageCards = deckCards.filter(card => card.type === 'image-occlusion').length;
+
+        const browserStats = document.getElementById('browserStats');
+        browserStats.innerHTML = `
+            <div class="stat-row">
+                <span>Total Cards:</span>
+                <span class="stat-value">${totalCards}</span>
+            </div>
+            <div class="stat-row">
+                <span>Due Today:</span>
+                <span class="stat-value">${dueCards}</span>
+            </div>
+            <div class="stat-row">
+                <span>New Cards:</span>
+                <span class="stat-value">${newCards}</span>
+            </div>
+            <div class="stat-row">
+                <span>Image Cards:</span>
+                <span class="stat-value">${imageCards}</span>
+            </div>
+            <div class="stat-row">
+                <span>Filtered:</span>
+                <span class="stat-value">${filteredCards.length}</span>
+            </div>
+        `;
+    }
+
+    editCard(cardId) {
+        // TODO: Implement card editing functionality
+        alert('Card editing will be implemented in a future update!');
+    }
+
+    deleteCard(cardId) {
+        if (confirm('Are you sure you want to delete this card? This action cannot be undone.')) {
+            // TODO: Implement card deletion functionality
+            alert('Card deletion will be implemented in a future update!');
+        }
     }
 }
 

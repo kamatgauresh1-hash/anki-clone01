@@ -52,6 +52,10 @@
             overflow: hidden;
         }
 
+        .main-content.with-browser {
+            grid-template-columns: 300px 300px 1fr;
+        }
+
         .sidebar {
             background: #f8f9fa;
             padding: 30px;
@@ -62,6 +66,171 @@
             margin-bottom: 20px;
             color: #495057;
             font-size: 1.2rem;
+        }
+
+        .card-browser {
+            background: #f8f9fa;
+            padding: 30px;
+            border-right: 1px solid #e9ecef;
+            display: none;
+        }
+
+        .card-browser.active {
+            display: block;
+        }
+
+        .card-browser-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .card-browser-header h3 {
+            color: #495057;
+            font-size: 1.2rem;
+            margin: 0;
+        }
+
+        .close-browser {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: #6c757d;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 4px;
+            transition: color 0.3s ease;
+        }
+
+        .close-browser:hover {
+            color: #495057;
+        }
+
+        .browser-search {
+            margin-bottom: 20px;
+        }
+
+        .browser-search input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .browser-search input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        .browser-filters {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            padding: 6px 12px;
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+        }
+
+        .filter-btn:hover {
+            border-color: #007bff;
+            background: #f8f9ff;
+        }
+
+        .filter-btn.active {
+            background: #007bff;
+            color: white;
+            border-color: #007bff;
+        }
+
+        .browser-card-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .browser-card-item {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .browser-card-item:hover {
+            border-color: #007bff;
+            box-shadow: 0 4px 12px rgba(0,123,255,0.15);
+        }
+
+        .browser-card-item.selected {
+            border-color: #007bff;
+            background: #f8f9ff;
+        }
+
+        .browser-card-front {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #495057;
+            font-size: 0.9rem;
+        }
+
+        .browser-card-back {
+            color: #6c757d;
+            margin-bottom: 8px;
+            font-size: 0.8rem;
+            line-height: 1.4;
+        }
+
+        .browser-card-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75rem;
+            color: #6c757d;
+        }
+
+        .browser-card-type {
+            padding: 2px 6px;
+            background: #e9ecef;
+            border-radius: 4px;
+            font-size: 0.7rem;
+        }
+
+        .browser-card-type.image-occlusion {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .browser-stats {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+
+        .browser-stats .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .browser-stats .stat-value {
+            font-weight: 600;
+            color: #495057;
         }
 
         .deck-list {
@@ -437,8 +606,18 @@
                 grid-template-columns: 1fr;
             }
             
+            .main-content.with-browser {
+                grid-template-columns: 1fr;
+            }
+            
             .sidebar {
                 order: 2;
+            }
+            
+            .card-browser {
+                order: 3;
+                border-right: none;
+                border-top: 1px solid #e9ecef;
             }
             
             .content-area {
@@ -463,7 +642,7 @@
             <p>Master spaced repetition learning with the SM2 algorithm</p>
         </div>
 
-        <div class="main-content">
+        <div class="main-content" id="mainContentContainer">
             <div class="sidebar">
                 <h3><i class="fas fa-layer-group"></i> Decks</h3>
                 <ul class="deck-list" id="deckList">
@@ -476,6 +655,34 @@
                 <h3 style="margin-top: 30px;"><i class="fas fa-chart-bar"></i> Statistics</h3>
                 <div class="stats-grid" id="statsGrid">
                     <!-- Stats will be populated here -->
+                </div>
+            </div>
+
+            <div class="card-browser" id="cardBrowser">
+                <div class="card-browser-header">
+                    <h3><i class="fas fa-search"></i> Card Browser</h3>
+                    <button class="close-browser" onclick="ankiApp.closeCardBrowser()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <div class="browser-search">
+                    <input type="text" id="browserSearch" placeholder="Search cards..." oninput="ankiApp.filterCards()">
+                </div>
+                
+                <div class="browser-filters">
+                    <button class="filter-btn active" data-filter="all" onclick="ankiApp.setFilter('all')">All</button>
+                    <button class="filter-btn" data-filter="due" onclick="ankiApp.setFilter('due')">Due</button>
+                    <button class="filter-btn" data-filter="new" onclick="ankiApp.setFilter('new')">New</button>
+                    <button class="filter-btn" data-filter="image-occlusion" onclick="ankiApp.setFilter('image-occlusion')">Image</button>
+                </div>
+                
+                <div class="browser-card-list" id="browserCardList">
+                    <!-- Cards will be populated here -->
+                </div>
+                
+                <div class="browser-stats" id="browserStats">
+                    <!-- Browser stats will be populated here -->
                 </div>
             </div>
 
