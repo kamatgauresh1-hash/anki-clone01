@@ -1395,6 +1395,17 @@ function showAddDeckModal() {
 
 function showAddCardModal() {
     document.getElementById('addCardModal').style.display = 'block';
+    // Prefill deck selection with the currently viewed deck
+    try {
+        if (ankiApp && ankiApp.currentDeck) {
+            const select = document.getElementById('cardDeck');
+            if (select) {
+                select.value = ankiApp.currentDeck.id;
+            }
+        }
+    } catch (e) {
+        // no-op
+    }
 }
 
 function closeModal(modalId) {
