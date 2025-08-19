@@ -765,6 +765,9 @@ class AnkiApp {
         studyCard.classList.add('flipped');
         qualityButtons.style.display = 'flex';
         
+        // Populate quality buttons with predicted next review intervals
+        this.populateQualityButtonsWithIntervals();
+        
         // For image occlusion cards, reveal the specific occlusion
         if (this.currentStudyCard && this.currentStudyCard.type === 'image-occlusion') {
             this.revealOcclusion();
@@ -791,15 +794,9 @@ class AnkiApp {
                 if (cardIndex !== -1) {
                     this.cards[cardIndex] = result.card;
                 }
-
-                // Show result briefly
-                this.showRatingResult(quality, result.sm2Result);
-                
-                // Move to next card after a delay
-                setTimeout(() => {
-                    this.currentCardIndex++;
-                    this.showStudyCard();
-                }, 2000);
+                // Immediately move to the next card
+                this.currentCardIndex++;
+                this.showStudyCard();
             }
         } catch (error) {
             console.error('Failed to rate card:', error);
@@ -907,6 +904,59 @@ class AnkiApp {
         // Hide all occlusions to reveal the answer and show original image
         this.occlusionsVisible = false;
         this.redrawStudyCanvas();
+    }
+
+    // Populate the quality buttons with predicted intervals based on current SM2 state
+    populateQualityButtonsWithIntervals() {
+        const qualityButtons = document.getElementById('qualityButtons');
+        if (!qualityButtons) return;
+        
+        const currentCard = this.studyCards && this.studyCards[this.currentCardIndex];
+        if (!currentCard || !currentCard.sm2) return;
+        
+        const sm2State = { ...currentCard.sm2 };
+        
+        const againBtn = qualityButtons.querySelector('.quality-btn.again');
+        const hardBtn = qualityButtons.querySelector('.quality-btn.hard');
+        const goodBtn = qualityButtons.querySelector('.quality-btn.good');
+        const easyBtn = qualityButtons.querySelector('.quality-btn.easy');
+        
+        const again = this.simulateSm2Next(sm2State, 0);
+        const hard = this.simulateSm2Next(sm2State, 1);
+        const good = this.simulateSm2Next(sm2State, 3);
+        const easy = this.simulateSm2Next(sm2State, 5);
+        
+        if (againBtn) againBtn.textContent = `Again (${this.formatIntervalDays(again.interval)})`;
+        if (hardBtn) hardBtn.textContent = `Hard (${this.formatIntervalDays(hard.interval)})`;
+        if (goodBtn) goodBtn.textContent = `Good (${this.formatIntervalDays(good.interval)})`;
+        if (easyBtn) easyBtn.textContent = `Easy (${this.formatIntervalDays(easy.interval)})`;
+    }
+    
+    // Simulate SM2 next review calculation (mirrors server logic)
+    simulateSm2Next(sm2State, quality) {
+        const result = { ...sm2State };
+        if (quality < 0 || quality > 5) return result;
+        
+        result.easiness = Math.max(1.3, result.easiness + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
+        if (quality >= 3) {
+            if (result.repetitions === 0) {
+                result.interval = 1;
+            } else if (result.repetitions === 1) {
+                result.interval = 6;
+            } else {
+                result.interval = Math.round(result.interval * result.easiness);
+            }
+            result.repetitions = result.repetitions + 1;
+        } else {
+            result.repetitions = 0;
+            result.interval = 1;
+        }
+        return result;
+    }
+    
+    formatIntervalDays(days) {
+        const n = Math.max(1, Math.round(days));
+        return n === 1 ? '1 day' : `${n} days`;
     }
 
     // Card Browser Methods
