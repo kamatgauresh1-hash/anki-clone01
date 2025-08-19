@@ -696,7 +696,7 @@ class AnkiApp {
         let occlusionCanvas = '';
         
         if (card.type === 'image-occlusion' && card.imagePath) {
-            // Create interactive occlusion canvas for study
+            // Create interactive occlusion canvas for study (rendered once below front/back)
             occlusionCanvas = `
                 <div style="margin: 20px 0;">
                     <div style="position: relative; display: inline-block;">
@@ -704,7 +704,7 @@ class AnkiApp {
                     </div>
                     <div style="margin-top: 15px;">
                         <p style="font-size: 0.9rem; color: #6c757d;">
-                            This card focuses on one specific hidden area. Click "Show Answer" to reveal what's hidden.
+                            Click "Show Answer" to reveal the original image without occlusions.
                         </p>
                     </div>
                 </div>
@@ -717,13 +717,12 @@ class AnkiApp {
                     <div class="card-front">
                         <h3>${card.front || 'Image Occlusion Card'}</h3>
                         ${cardContent}
-                        ${occlusionCanvas}
                     </div>
                     <div class="card-back">
                         <h3>${card.back || 'Answer'}</h3>
                         ${cardContent}
-                        ${occlusionCanvas}
                     </div>
+                    ${occlusionCanvas}
                 </div>
                 
                 <div style="margin-bottom: 20px;">
@@ -905,7 +904,7 @@ class AnkiApp {
     }
 
     revealOcclusion() {
-        // Hide all occlusions to reveal the answer
+        // Hide all occlusions to reveal the answer and show original image
         this.occlusionsVisible = false;
         this.redrawStudyCanvas();
     }
