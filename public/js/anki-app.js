@@ -11,6 +11,8 @@ class AnkiApp {
         this.currentFilter = 'all';
         this.searchQuery = '';
         this.selectedCardId = null;
+        this.selectionMode = false;
+        this.selectedCardIds = new Set();
         
         this.init();
     }
@@ -38,6 +40,15 @@ class AnkiApp {
 
         // Image upload handling
         this.setupImageUpload();
+
+        // Close browser menu on outside click
+        document.addEventListener('click', (e) => {
+            const menu = document.getElementById('browserDropdown');
+            const isKebab = e.target && (e.target.classList && e.target.classList.contains('kebab-btn'));
+            if (menu && menu.classList.contains('active') && !menu.contains(e.target) && !isKebab) {
+                menu.classList.remove('active');
+            }
+        });
     }
 
     setupImageUpload() {
@@ -1021,10 +1032,27 @@ class AnkiApp {
         const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
         const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
         const isSelected = this.selectedCardId === card.id ? 'selected' : '';
+        const isChecked = this.selectedCardIds && this.selectedCardIds.has(card.id);
+
+        const selectionCheckbox = this.selectionMode ? `
+            <input type="checkbox" ${isChecked ? 'checked' : ''} onclick="ankiApp.toggleSelectCard(event, '${card.id}')" style="margin-right: 8px;">
+        ` : '';
+
+        const bookmarkBtn = `
+            <button onclick="ankiApp.toggleBookmark(event, '${card.id}')" style="background:none;border:none;cursor:pointer;float:right;color:${card.bookmarked ? '#f59f00' : '#6c757d'}" title="Toggle bookmark">
+                <i class="${card.bookmarked ? 'fas' : 'far'} fa-bookmark"></i>
+            </button>
+        `;
 
         return `
             <div class="browser-card-item ${isSelected}" onclick="ankiApp.selectBrowserCard('${card.id}')">
-                <div class="browser-card-front">${card.front || 'Image Occlusion Card'}</div>
+                <div style="display:flex; align-items:center; justify-content:space-between;">
+                    <div style="display:flex; align-items:center;">
+                        ${selectionCheckbox}
+                        <div class="browser-card-front">${card.front || 'Image Occlusion Card'}</div>
+                    </div>
+                    ${bookmarkBtn}
+                </div>
                 <div class="browser-card-back">${card.back || 'Answer'}</div>
                 <div class="browser-card-meta">
                     <span class="browser-card-type ${cardTypeClass}">${card.type}</span>
@@ -1045,6 +1073,137 @@ class AnkiApp {
         const selectedCard = this.cards.find(card => card.id === cardId);
         if (selectedCard) {
             this.showCardDetails(selectedCard);
+        }
+    }
+
+    // Browser menu controls
+    toggleBrowserMenu(event) {
+        event.stopPropagation();
+        const menu = document.getElementById('browserDropdown');
+        if (menu) menu.classList.toggle('active');
+    }
+
+    toggleSelectionMode() {
+        this.selectionMode = !this.selectionMode;
+        if (!this.selectionMode) {
+            this.selectedCardIds.clear();
+        }
+        this.populateCardBrowser();
+    }
+
+    toggleSelectCard(event, cardId) {
+        event.stopPropagation();
+        if (!this.selectionMode) return;
+        if (this.selectedCardIds.has(cardId)) {
+            this.selectedCardIds.delete(cardId);
+        } else {
+            this.selectedCardIds.add(cardId);
+        }
+        this.populateCardBrowser();
+    }
+
+    selectAllInBrowser() {
+        if (!this.currentDeck) return;
+        this.selectionMode = true;
+        const deckCards = this.cards.filter(card => card.deckId === this.currentDeck.id);
+        const filtered = this.getFilteredCards(deckCards);
+        this.selectedCardIds = new Set(filtered.map(c => c.id));
+        this.populateCardBrowser();
+    }
+
+    async bulkDeleteSelected() {
+        const ids = Array.from(this.selectedCardIds);
+        if (ids.length === 0) {
+            alert('No cards selected');
+            return;
+        }
+        if (!confirm(`Delete ${ids.length} selected card(s)? This cannot be undone.`)) return;
+        try {
+            const res = await fetch('/api/cards/bulk-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids })
+            });
+            if (res.ok) {
+                this.cards = this.cards.filter(c => !this.selectedCardIds.has(c.id));
+                this.selectedCardIds.clear();
+                this.selectionMode = false;
+                this.populateCardBrowser();
+                this.updateBrowserStats();
+                this.updateStats();
+                if (this.currentDeck) this.showDeckView(this.currentDeck);
+            } else {
+                const t = await res.text();
+                alert('Failed to delete: ' + t);
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Failed to delete selected cards');
+        }
+    }
+
+    async bulkMoveSelected() {
+        const ids = Array.from(this.selectedCardIds);
+        if (ids.length === 0) {
+            alert('No cards selected');
+            return;
+        }
+        if (!this.decks || this.decks.length === 0) {
+            alert('No decks available');
+            return;
+        }
+        const options = this.decks.map((d, i) => `${i + 1}. ${d.name}`).join('\n');
+        const answer = prompt(`Move selected to which deck? Enter number:\n${options}`);
+        if (!answer) return;
+        const idx = parseInt(answer, 10) - 1;
+        if (Number.isNaN(idx) || idx < 0 || idx >= this.decks.length) {
+            alert('Invalid selection');
+            return;
+        }
+        const targetDeck = this.decks[idx];
+        try {
+            const res = await fetch('/api/cards/bulk-move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids, deckId: targetDeck.id })
+            });
+            if (res.ok) {
+                this.cards.forEach(c => { if (this.selectedCardIds.has(c.id)) c.deckId = targetDeck.id; });
+                this.selectedCardIds.clear();
+                this.selectionMode = false;
+                this.populateCardBrowser();
+                this.updateBrowserStats();
+                this.updateStats();
+                if (this.currentDeck) this.showDeckView(this.currentDeck);
+                alert(`Moved to ${targetDeck.name}`);
+            } else {
+                const t = await res.text();
+                alert('Failed to move: ' + t);
+            }
+        } catch (e) {
+            console.error(e);
+            alert('Failed to move selected cards');
+        }
+    }
+
+    async toggleBookmark(event, cardId) {
+        event.stopPropagation();
+        const card = this.cards.find(c => c.id === cardId);
+        if (!card) return;
+        try {
+            const res = await fetch(`/api/cards/${cardId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bookmarked: !card.bookmarked })
+            });
+            if (res.ok) {
+                const updated = await res.json();
+                const idx = this.cards.findIndex(c => c.id === cardId);
+                if (idx !== -1) this.cards[idx] = updated;
+                this.populateCardBrowser();
+            }
+        } catch (e) {
+            console.error('Failed to toggle bookmark', e);
         }
     }
 
@@ -1179,15 +1338,52 @@ class AnkiApp {
         `;
     }
 
-    editCard(cardId) {
-        // TODO: Implement card editing functionality
-        alert('Card editing will be implemented in a future update!');
+    async editCard(cardId) {
+        const card = this.cards.find(c => c.id === cardId);
+        if (!card) return;
+        const newFront = prompt('Edit Front:', card.front || '');
+        if (newFront === null) return;
+        const newBack = prompt('Edit Back:', card.back || '');
+        if (newBack === null) return;
+        try {
+            const res = await fetch(`/api/cards/${cardId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ front: newFront, back: newBack })
+            });
+            if (res.ok) {
+                const updated = await res.json();
+                const idx = this.cards.findIndex(c => c.id === cardId);
+                if (idx !== -1) this.cards[idx] = updated;
+                this.populateCardBrowser();
+                this.updateBrowserStats();
+                this.showCardDetails(updated);
+            } else {
+                const t = await res.text();
+                alert('Failed to edit card: ' + t);
+            }
+        } catch (e) {
+            console.error('Failed to edit card', e);
+        }
     }
 
-    deleteCard(cardId) {
-        if (confirm('Are you sure you want to delete this card? This action cannot be undone.')) {
-            // TODO: Implement card deletion functionality
-            alert('Card deletion will be implemented in a future update!');
+    async deleteCard(cardId) {
+        if (!confirm('Delete this card? This cannot be undone.')) return;
+        try {
+            const res = await fetch(`/api/cards/${cardId}`, { method: 'DELETE' });
+            if (res.ok) {
+                this.cards = this.cards.filter(c => c.id !== cardId);
+                if (this.selectedCardId === cardId) this.selectedCardId = null;
+                this.populateCardBrowser();
+                this.updateBrowserStats();
+                if (this.currentDeck) this.showDeckView(this.currentDeck);
+                document.getElementById('mainContent').innerHTML = '<p style="color:#6c757d">Card deleted.</p>';
+            } else {
+                const t = await res.text();
+                alert('Failed to delete card: ' + t);
+            }
+        } catch (e) {
+            console.error('Failed to delete card', e);
         }
     }
 }

@@ -148,6 +148,7 @@ app.post('/api/cards', (req, res) => {
     type: type || 'basic',
     imagePath,
     occlusionData,
+    bookmarked: false,
     sm2: new SM2(),
     createdAt: new Date().toISOString(),
     lastReviewed: null,
@@ -212,6 +213,65 @@ app.post('/api/upload-image', upload.single('image'), (req, res) => {
     imagePath,
     filename: req.file.filename 
   });
+});
+
+// Update a card
+app.put('/api/cards/:id', (req, res) => {
+  const { id } = req.params;
+  const card = cards.find(c => c.id === id);
+  if (!card) {
+    return res.status(404).json({ error: 'Card not found' });
+  }
+
+  const { front, back, deckId, bookmarked, imagePath, occlusionData, type } = req.body;
+  if (typeof front !== 'undefined') card.front = front;
+  if (typeof back !== 'undefined') card.back = back;
+  if (typeof deckId !== 'undefined') card.deckId = deckId;
+  if (typeof bookmarked !== 'undefined') card.bookmarked = !!bookmarked;
+  if (typeof imagePath !== 'undefined') card.imagePath = imagePath;
+  if (typeof occlusionData !== 'undefined') card.occlusionData = occlusionData;
+  if (typeof type !== 'undefined') card.type = type;
+
+  res.json(card);
+});
+
+// Delete a card
+app.delete('/api/cards/:id', (req, res) => {
+  const { id } = req.params;
+  const index = cards.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Card not found' });
+  }
+  const [removed] = cards.splice(index, 1);
+  res.json({ success: true, removed });
+});
+
+// Bulk delete
+app.post('/api/cards/bulk-delete', (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids)) {
+    return res.status(400).json({ error: 'ids must be an array' });
+  }
+  const before = cards.length;
+  cards = cards.filter(c => !ids.includes(c.id));
+  const deleted = before - cards.length;
+  res.json({ success: true, deleted });
+});
+
+// Bulk move to another deck
+app.post('/api/cards/bulk-move', (req, res) => {
+  const { ids, deckId } = req.body;
+  if (!Array.isArray(ids) || !deckId) {
+    return res.status(400).json({ error: 'ids array and deckId are required' });
+  }
+  let updated = 0;
+  cards.forEach(c => {
+    if (ids.includes(c.id)) {
+      c.deckId = deckId;
+      updated++;
+    }
+  });
+  res.json({ success: true, updated });
 });
 
 // Get statistics

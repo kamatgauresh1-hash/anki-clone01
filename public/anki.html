@@ -88,6 +88,45 @@
             border-bottom: 2px solid #e9ecef;
         }
 
+        .browser-actions {
+            position: relative;
+        }
+
+        .kebab-btn {
+            background: none;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            color: #6c757d;
+        }
+
+        .dropdown-menu {
+            position: absolute;
+            right: 0;
+            top: 36px;
+            background: #fff;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+            min-width: 200px;
+            z-index: 10;
+            display: none;
+        }
+
+        .dropdown-menu.active { display: block; }
+
+        .dropdown-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            border-bottom: 1px solid #f1f3f5;
+            font-size: 0.9rem;
+        }
+
+        .dropdown-item:last-child { border-bottom: none; }
+
+        .dropdown-item:hover { background: #f8f9fa; }
+
         .card-browser-header h3 {
             color: #495057;
             font-size: 1.2rem;
@@ -661,9 +700,20 @@
             <div class="card-browser" id="cardBrowser">
                 <div class="card-browser-header">
                     <h3><i class="fas fa-search"></i> Card Browser</h3>
-                    <button class="close-browser" onclick="ankiApp.closeCardBrowser()">
-                        <i class="fas fa-times"></i>
-                    </button>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <div class="browser-actions">
+                            <button class="kebab-btn" onclick="ankiApp.toggleBrowserMenu(event)">⋯</button>
+                            <div id="browserDropdown" class="dropdown-menu">
+                                <div class="dropdown-item" onclick="ankiApp.selectAllInBrowser()">Select All</div>
+                                <div class="dropdown-item" onclick="ankiApp.toggleSelectionMode()">Select Cards</div>
+                                <div class="dropdown-item" onclick="ankiApp.bulkDeleteSelected()">Delete Selected</div>
+                                <div class="dropdown-item" onclick="ankiApp.bulkMoveSelected()">Move Selected to Deck</div>
+                            </div>
+                        </div>
+                        <button class="close-browser" onclick="ankiApp.closeCardBrowser()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
                 </div>
                 
                 <div class="browser-search">
