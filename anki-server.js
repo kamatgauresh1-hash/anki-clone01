@@ -102,7 +102,21 @@ const initializeData = () => {
       id: 'default',
       name: 'Default Deck',
       description: 'Your default study deck',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      options: {
+        newCardsPerDay: 20,
+        maxReviewsPerDay: 200,
+        newOrder: 'added', // 'added' | 'random'
+        learningStepsMinutes: [25, 1440],
+        graduatingIntervalDays: 3,
+        easyIntervalDays: 4,
+        startingEasePercent: 250,
+        easyBonusPercent: 150,
+        hardIntervalPercent: 120,
+        intervalModifierPercent: 100,
+        maximumIntervalDays: 36500,
+        buryRelatedReviews: true
+      }
     });
   }
 };
@@ -120,12 +134,45 @@ app.post('/api/decks', (req, res) => {
     id: Date.now().toString(),
     name,
     description: description || '',
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    options: {
+      newCardsPerDay: 20,
+      maxReviewsPerDay: 200,
+      newOrder: 'added',
+      learningStepsMinutes: [25, 1440],
+      graduatingIntervalDays: 3,
+      easyIntervalDays: 4,
+      startingEasePercent: 250,
+      easyBonusPercent: 150,
+      hardIntervalPercent: 120,
+      intervalModifierPercent: 100,
+      maximumIntervalDays: 36500,
+      buryRelatedReviews: true
+    }
   };
   console.log('Creating new deck:', newDeck);
   decks.push(newDeck);
   console.log('Decks after creation:', decks);
   res.json(newDeck);
+});
+
+// Update a deck (name/description/options)
+app.put('/api/decks/:id', (req, res) => {
+  const { id } = req.params;
+  const deck = decks.find(d => d.id === id);
+  if (!deck) {
+    return res.status(404).json({ error: 'Deck not found' });
+  }
+  const { name, description, options } = req.body;
+  if (typeof name !== 'undefined') deck.name = name;
+  if (typeof description !== 'undefined') deck.description = description;
+  if (typeof options !== 'undefined' && options && typeof options === 'object') {
+    deck.options = {
+      ...deck.options,
+      ...options
+    };
+  }
+  res.json(deck);
 });
 
 app.get('/api/cards', (req, res) => {
@@ -140,6 +187,7 @@ app.get('/api/cards', (req, res) => {
 app.post('/api/cards', (req, res) => {
   console.log('POST /api/cards received:', req.body);
   const { front, back, deckId, type, imagePath, occlusionData } = req.body;
+  const deckForCard = decks.find(d => d.id === (deckId || 'default'));
   const newCard = {
     id: Date.now().toString(),
     front,
@@ -152,8 +200,16 @@ app.post('/api/cards', (req, res) => {
     sm2: new SM2(),
     createdAt: new Date().toISOString(),
     lastReviewed: null,
-    nextReview: null
+    nextReview: null,
+    learningStepIndex: 0
   };
+  // Apply deck starting ease if available
+  try {
+    const startingEasePercent = deckForCard && deckForCard.options && deckForCard.options.startingEasePercent;
+    if (startingEasePercent) {
+      newCard.sm2.easiness = Math.max(1.3, (startingEasePercent / 100));
+    }
+  } catch {}
   console.log('Creating new card:', newCard);
   cards.push(newCard);
   console.log('Cards after creation:', cards);
@@ -169,7 +225,82 @@ app.post('/api/cards/:id/review', (req, res) => {
     return res.status(404).json({ error: 'Card not found' });
   }
 
+  const deck = decks.find(d => d.id === card.deckId);
+  const opts = deck && deck.options ? deck.options : null;
+  const steps = (opts && Array.isArray(opts.learningStepsMinutes) && opts.learningStepsMinutes.length > 0)
+    ? opts.learningStepsMinutes
+    : [];
+
+  // Learning steps handling for brand new cards before SM2 graduation
+  if (card.sm2.repetitions === 0 && steps.length > 0) {
+    const now = Date.now();
+    const currentStepIndex = Number.isInteger(card.learningStepIndex) ? card.learningStepIndex : 0;
+    if (quality < 3) {
+      // Repeat first step
+      const minutes = steps[0];
+      card.learningStepIndex = 0;
+      card.lastReviewed = new Date().toISOString();
+      card.nextReview = new Date(now + minutes * 60 * 1000);
+      return res.json({
+        card,
+        sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) }
+      });
+    }
+    // quality >= 3 (Good/Easy) progress through steps if any remain
+    if (currentStepIndex < steps.length - 1) {
+      const nextIndex = currentStepIndex + 1;
+      const minutes = steps[nextIndex];
+      card.learningStepIndex = nextIndex;
+      card.lastReviewed = new Date().toISOString();
+      card.nextReview = new Date(now + minutes * 60 * 1000);
+      return res.json({
+        card,
+        sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) }
+      });
+    }
+    // Finished steps → graduate below using SM2 with deck-specific first intervals
+  }
+
+  const preRepetitions = card.sm2.repetitions;
   const result = card.sm2.calculateNextReview(quality);
+
+  // On graduation from learning, clear step tracking
+  if (card.sm2.repetitions > 0) {
+    card.learningStepIndex = null;
+  }
+
+  // Apply deck-specific modifiers
+  try {
+    // First successful review intervals for new cards
+    const isFirstSuccess = quality >= 3 && preRepetitions === 0;
+    if (opts && isFirstSuccess) {
+      if (quality >= 5 && typeof opts.easyIntervalDays === 'number') {
+        result.interval = Math.max(1, Math.round(opts.easyIntervalDays));
+      } else if (quality >= 3 && typeof opts.graduatingIntervalDays === 'number') {
+        result.interval = Math.max(1, Math.round(opts.graduatingIntervalDays));
+      }
+    }
+
+    // Apply easy/hard bonuses to interval after SM2 calc
+    if (opts) {
+      if (quality >= 5 && typeof opts.easyBonusPercent === 'number') {
+        result.interval = Math.round(result.interval * (opts.easyBonusPercent / 100));
+      }
+      if (quality === 1 && typeof opts.hardIntervalPercent === 'number') {
+        result.interval = Math.max(1, Math.round(result.interval * (opts.hardIntervalPercent / 100)));
+      }
+      if (typeof opts.intervalModifierPercent === 'number') {
+        result.interval = Math.max(1, Math.round(result.interval * (opts.intervalModifierPercent / 100)));
+      }
+      if (typeof opts.maximumIntervalDays === 'number') {
+        result.interval = Math.min(result.interval, Math.round(opts.maximumIntervalDays));
+      }
+    }
+
+    result.nextReview = new Date(Date.now() + result.interval * 24 * 60 * 60 * 1000);
+    // Keep SM2 state consistent
+    card.sm2.interval = result.interval;
+  } catch {}
   card.lastReviewed = new Date().toISOString();
   card.nextReview = result.nextReview;
 

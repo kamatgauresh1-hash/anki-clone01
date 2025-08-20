@@ -329,10 +329,12 @@ class AnkiApp {
             // Add to sidebar deck list
             const deckItem = document.createElement('li');
             deckItem.className = 'deck-item';
-            deckItem.onclick = (event) => this.selectDeck(deck, event);
             deckItem.innerHTML = `
-                <div class="deck-name">${deck.name}</div>
-                <div class="deck-count">${cardCount} cards</div>
+                <div style="flex:1;" onclick="ankiApp.selectDeckById('${deck.id}', event)">
+                    <div class=\"deck-name\">${deck.name}</div>
+                    <div class=\"deck-count\">${cardCount} cards</div>
+                </div>
+                <button class="deck-kebab" title="Deck options" onclick="ankiApp.openDeckOptions(event, '${deck.id}')">⋯</button>
             `;
             deckList.appendChild(deckItem);
 
@@ -344,6 +346,88 @@ class AnkiApp {
         });
     }
 
+    selectDeckById(deckId, event) {
+        const deck = this.decks.find(d => d.id === deckId);
+        if (deck) this.selectDeck(deck, event);
+    }
+
+    openDeckOptions(event, deckId) {
+        event.stopPropagation();
+        const deck = this.decks.find(d => d.id === deckId);
+        if (!deck) return;
+        this.currentDeck = deck;
+        // Prefill modal
+        document.getElementById('deckOptionsName').value = deck.name || '';
+        document.getElementById('deckOptionsDescription').value = deck.description || '';
+        const opts = (deck.options) || { newCardsPerDay: 20, maxReviewsPerDay: 200, newOrder: 'added', learningStepsMinutes: [25,1440], graduatingIntervalDays: 3, easyIntervalDays: 4, startingEasePercent: 250 };
+        document.getElementById('newCardsPerDay').value = opts.newCardsPerDay ?? 20;
+        document.getElementById('maxReviewsPerDay').value = opts.maxReviewsPerDay ?? 200;
+        document.getElementById('newOrder').value = opts.newOrder || 'added';
+        document.getElementById('learningStepsMinutes').value = (opts.learningStepsMinutes && Array.isArray(opts.learningStepsMinutes)) ? opts.learningStepsMinutes.join(',') : '25,1440';
+        document.getElementById('graduatingIntervalDays').value = opts.graduatingIntervalDays ?? 3;
+        document.getElementById('easyIntervalDays').value = opts.easyIntervalDays ?? 4;
+        document.getElementById('startingEasePercent').value = opts.startingEasePercent ?? 250;
+        document.getElementById('easyBonusPercent').value = (opts.easyBonusPercent ?? 150);
+        document.getElementById('hardIntervalPercent').value = (opts.hardIntervalPercent ?? 120);
+        document.getElementById('intervalModifierPercent').value = (opts.intervalModifierPercent ?? 100);
+        document.getElementById('maximumIntervalDays').value = (opts.maximumIntervalDays ?? 36500);
+        document.getElementById('buryRelatedReviews').checked = (typeof opts.buryRelatedReviews === 'boolean') ? opts.buryRelatedReviews : true;
+        document.getElementById('deckOptionsModal').style.display = 'block';
+        // Attach handler once
+        const form = document.getElementById('deckOptionsForm');
+        form.onsubmit = (e) => {
+            e.preventDefault();
+            this.saveDeckOptions(deckId);
+        };
+    }
+
+    async saveDeckOptions(deckId) {
+        const deck = this.decks.find(d => d.id === deckId);
+        if (!deck) return;
+        const name = document.getElementById('deckOptionsName').value;
+        const description = document.getElementById('deckOptionsDescription').value;
+        const newCardsPerDay = parseInt(document.getElementById('newCardsPerDay').value, 10) || 0;
+        const maxReviewsPerDay = parseInt(document.getElementById('maxReviewsPerDay').value, 10) || 0;
+        const newOrder = document.getElementById('newOrder').value;
+        const stepsStr = document.getElementById('learningStepsMinutes').value || '';
+        const learningStepsMinutes = stepsStr.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !Number.isNaN(n) && n > 0);
+        const graduatingIntervalDays = parseInt(document.getElementById('graduatingIntervalDays').value, 10) || 3;
+        const easyIntervalDays = parseInt(document.getElementById('easyIntervalDays').value, 10) || 4;
+        const startingEasePercent = parseInt(document.getElementById('startingEasePercent').value, 10) || 250;
+        const easyBonusPercent = parseInt(document.getElementById('easyBonusPercent').value, 10) || 150;
+        const hardIntervalPercent = parseInt(document.getElementById('hardIntervalPercent').value, 10) || 120;
+        const intervalModifierPercent = parseInt(document.getElementById('intervalModifierPercent').value, 10) || 100;
+        const maximumIntervalDays = parseInt(document.getElementById('maximumIntervalDays').value, 10) || 36500;
+        const buryRelatedReviews = !!document.getElementById('buryRelatedReviews').checked;
+        try {
+            const res = await fetch(`/api/decks/${deckId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    description,
+                    options: { newCardsPerDay, maxReviewsPerDay, newOrder, learningStepsMinutes, graduatingIntervalDays, easyIntervalDays, startingEasePercent, easyBonusPercent, hardIntervalPercent, intervalModifierPercent, maximumIntervalDays, buryRelatedReviews }
+                })
+            });
+            if (res.ok) {
+                const updated = await res.json();
+                const idx = this.decks.findIndex(d => d.id === deckId);
+                if (idx !== -1) this.decks[idx] = updated;
+                this.renderDecks();
+                closeModal('deckOptionsModal');
+                if (this.currentDeck && this.currentDeck.id === deckId) {
+                    this.selectDeck(updated, null);
+                }
+            } else {
+                const t = await res.text();
+                alert('Failed to save deck options: ' + t);
+            }
+        } catch (e) {
+            console.error('Failed to save deck options', e);
+            alert('Failed to save deck options');
+        }
+    }
+
     selectDeck(deck, event) {
         this.currentDeck = deck;
         
@@ -352,7 +436,10 @@ class AnkiApp {
             item.classList.remove('active');
         });
         if (event && event.currentTarget) {
-            event.currentTarget.classList.add('active');
+            const li = event.currentTarget.classList.contains('deck-item')
+                ? event.currentTarget
+                : event.currentTarget.closest('.deck-item');
+            if (li) li.classList.add('active');
         }
 
         // Ensure the card browser is closed so only the deck view shows
@@ -682,9 +769,36 @@ class AnkiApp {
         if (!this.currentDeck) return;
         
         const deckCards = this.cards.filter(card => card.deckId === this.currentDeck.id);
-        const dueCards = deckCards.filter(card => {
-            return !card.nextReview || new Date(card.nextReview) <= new Date();
-        });
+
+        // Apply deck options for study limits/order
+        const options = (this.currentDeck && this.currentDeck.options) || { newCardsPerDay: 20, maxReviewsPerDay: 200, newOrder: 'added', buryRelatedReviews: true };
+
+        // Separate due reviews and new cards
+        const now = new Date();
+        let dueReviews = deckCards.filter(card => card.lastReviewed && (!card.nextReview || new Date(card.nextReview) <= now));
+        let newCards = deckCards.filter(card => !card.lastReviewed);
+        // Order new cards
+        if (options.newOrder === 'random') {
+            newCards = newCards.sort(() => Math.random() - 0.5);
+        } // else keep as added order
+        // Apply daily limits
+        dueReviews = dueReviews.slice(0, Math.max(0, options.maxReviewsPerDay || 0));
+        newCards = newCards.slice(0, Math.max(0, options.newCardsPerDay || 0));
+        let dueCards = [...dueReviews, ...newCards];
+
+        // Bury related reviews (siblings) for image-occlusion cards if enabled
+        if (options.buryRelatedReviews) {
+            const seenImages = new Set();
+            const filtered = [];
+            for (const c of dueCards) {
+                if (c.type === 'image-occlusion' && c.imagePath) {
+                    if (seenImages.has(c.imagePath)) continue; // skip sibling
+                    seenImages.add(c.imagePath);
+                }
+                filtered.push(c);
+            }
+            dueCards = filtered;
+        }
 
         if (dueCards.length === 0) {
             alert('No cards due for review in this deck!');
