@@ -26,7 +26,9 @@
         }
 
         .header {
-            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 30px;
             color: white;
         }
@@ -40,6 +42,18 @@
         .header p {
             font-size: 1.1rem;
             opacity: 0.9;
+        }
+
+        .account-bar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .account-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 0.9rem;
         }
 
         .main-content {
@@ -692,8 +706,15 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1><i class="fas fa-brain"></i> Anki Clone</h1>
-            <p>Master spaced repetition learning with the SM2 algorithm</p>
+            <div>
+                <h1><i class="fas fa-brain"></i> Anki Clone</h1>
+                <p>Master spaced repetition learning with the SM2 algorithm</p>
+            </div>
+            <div class="account-bar">
+                <span id="accountRole" class="account-badge">Guest</span>
+                <button class="btn btn-secondary" id="loginBtn" onclick="ankiApp.showLoginModal()">Login</button>
+                <button class="btn btn-secondary hidden" id="logoutBtn" onclick="ankiApp.logout()">Logout</button>
+            </div>
         </div>
 
         <div class="main-content" id="mainContentContainer">
@@ -702,7 +723,7 @@
                 <ul class="deck-list" id="deckList">
                     <!-- Decks will be populated here -->
                 </ul>
-                <button class="add-deck-btn" onclick="showAddDeckModal()">
+                <button class="add-deck-btn" id="addDeckButton" onclick="showAddDeckModal()">
                     <i class="fas fa-plus"></i> Add Deck
                 </button>
 
@@ -767,6 +788,29 @@
     </div>
 
     <!-- Add Deck Modal -->
+    <!-- Login Modal -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Login</h3>
+                <span class="close" onclick="closeModal('loginModal')">&times;</span>
+            </div>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="loginUsername">Username</label>
+                    <input type="text" id="loginUsername" placeholder="Username" required>
+                </div>
+                <div class="form-group">
+                    <label for="loginPassword">Password</label>
+                    <input type="password" id="loginPassword" placeholder="Password" required>
+                </div>
+                <div style="text-align: right;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('loginModal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <div id="addDeckModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">

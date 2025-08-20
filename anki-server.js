@@ -94,6 +94,32 @@ class SM2 {
 // Data storage (in production, use a proper database)
 let cards = [];
 let decks = [];
+let users = [
+  { id: 'admin-1', username: 'GAURESH KAMAT', password: 'Patankart@73', role: 'admin' }
+];
+const sessions = new Map(); // token -> userId
+const userCardStates = new Map(); // key `${userId}:${cardId}` -> { sm2: SM2, lastReviewed, nextReview, learningStepIndex, lapses, bookmarked }
+
+function generateToken() {
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+function getUserFromReq(req) {
+  const token = req.header('x-auth-token');
+  if (!token) return null;
+  const userId = sessions.get(token);
+  if (!userId) return null;
+  return users.find(u => u.id === userId) || null;
+}
+
+function requireAdmin(req, res) {
+  const user = getUserFromReq(req);
+  if (!user || user.role !== 'admin') {
+    res.status(403).json({ error: 'Admin privileges required' });
+    return null;
+  }
+  return user;
+}
 
 // Initialize with sample data
 const initializeData = () => {
@@ -126,12 +152,47 @@ const initializeData = () => {
 };
 
 // Routes
+// Auth
+app.post('/api/register', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: 'username and password required' });
+  const exists = users.some(u => u.username === username);
+  if (exists) return res.status(400).json({ error: 'User already exists' });
+  const user = { id: Date.now().toString(), username, password, role: 'user' };
+  users.push(user);
+  res.json({ success: true });
+});
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  const uIn = (username || '').trim();
+  const pIn = (password || '').trim();
+  console.log('LOGIN attempt:', { username: uIn });
+  const user = users.find(u => u.username.trim().toLowerCase() === uIn.toLowerCase() && (u.password || '').trim() === pIn);
+  if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+  const token = generateToken();
+  sessions.set(token, user.id);
+  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+});
+
+app.post('/api/logout', (req, res) => {
+  const token = req.header('x-auth-token');
+  if (token) sessions.delete(token);
+  res.json({ success: true });
+});
+
+app.get('/api/me', (req, res) => {
+  const user = getUserFromReq(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ id: user.id, username: user.username, role: user.role });
+});
 app.get('/api/decks', (req, res) => {
   initializeData();
   res.json(decks);
 });
 
 app.post('/api/decks', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   console.log('POST /api/decks received:', req.body);
   const { name, description } = req.body;
   const newDeck = {
@@ -166,6 +227,7 @@ app.post('/api/decks', (req, res) => {
 
 // Update a deck (name/description/options)
 app.put('/api/decks/:id', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const { id } = req.params;
   const deck = decks.find(d => d.id === id);
   if (!deck) {
@@ -184,15 +246,33 @@ app.put('/api/decks/:id', (req, res) => {
 });
 
 app.get('/api/cards', (req, res) => {
+  const user = getUserFromReq(req);
   const { deckId } = req.query;
   let filteredCards = cards;
   if (deckId) {
     filteredCards = cards.filter(card => card.deckId === deckId);
   }
-  res.json(filteredCards);
+  // Merge per-user state into response when available
+  const result = filteredCards.map(base => {
+    const merged = { ...base };
+    if (user) {
+      const key = `${user.id}:${base.id}`;
+      const state = userCardStates.get(key);
+      if (state) {
+        merged.lastReviewed = state.lastReviewed || null;
+        merged.nextReview = state.nextReview || null;
+        merged.learningStepIndex = typeof state.learningStepIndex === 'number' ? state.learningStepIndex : null;
+        merged.bookmarked = !!state.bookmarked;
+        merged.sm2 = state.sm2 || merged.sm2;
+      }
+    }
+    return merged;
+  });
+  res.json(result);
 });
 
 app.post('/api/cards', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   console.log('POST /api/cards received:', req.body);
   const { front, back, deckId, type, imagePath, occlusionData } = req.body;
   const deckForCard = decks.find(d => d.id === (deckId || 'default'));
@@ -225,6 +305,7 @@ app.post('/api/cards', (req, res) => {
 });
 
 app.post('/api/cards/:id/review', (req, res) => {
+  const user = getUserFromReq(req);
   const { id } = req.params;
   const { quality } = req.body;
   
@@ -377,8 +458,23 @@ app.post('/api/cards/:id/review', (req, res) => {
     // Keep SM2 state consistent
     card.sm2.interval = result.interval;
   } catch {}
-  card.lastReviewed = new Date().toISOString();
-  card.nextReview = result.nextReview;
+  const finalLast = new Date().toISOString();
+  const finalNext = result.nextReview;
+  card.lastReviewed = finalLast;
+  card.nextReview = finalNext;
+
+  // Persist per-user review state
+  if (user) {
+    const key = `${user.id}:${card.id}`;
+    userCardStates.set(key, {
+      sm2: { ...card.sm2 },
+      lastReviewed: finalLast,
+      nextReview: finalNext,
+      learningStepIndex: typeof card.learningStepIndex === 'number' ? card.learningStepIndex : null,
+      lapses: card.lapses || 0,
+      bookmarked: !!card.bookmarked
+    });
+  }
 
   res.json({
     card,
@@ -424,6 +520,7 @@ app.post('/api/upload-image', upload.single('image'), (req, res) => {
 
 // Update a card
 app.put('/api/cards/:id', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const { id } = req.params;
   const card = cards.find(c => c.id === id);
   if (!card) {
@@ -444,6 +541,7 @@ app.put('/api/cards/:id', (req, res) => {
 
 // Delete a card
 app.delete('/api/cards/:id', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const { id } = req.params;
   const index = cards.findIndex(c => c.id === id);
   if (index === -1) {
@@ -455,6 +553,7 @@ app.delete('/api/cards/:id', (req, res) => {
 
 // Bulk delete
 app.post('/api/cards/bulk-delete', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const { ids } = req.body;
   if (!Array.isArray(ids)) {
     return res.status(400).json({ error: 'ids must be an array' });
@@ -467,6 +566,7 @@ app.post('/api/cards/bulk-delete', (req, res) => {
 
 // Bulk move to another deck
 app.post('/api/cards/bulk-move', (req, res) => {
+  if (!requireAdmin(req, res)) return;
   const { ids, deckId } = req.body;
   if (!Array.isArray(ids) || !deckId) {
     return res.status(400).json({ error: 'ids array and deckId are required' });

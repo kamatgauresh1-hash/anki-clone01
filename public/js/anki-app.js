@@ -13,11 +13,13 @@ class AnkiApp {
         this.selectedCardId = null;
         this.selectionMode = false;
         this.selectedCardIds = new Set();
+        this.auth = { token: null, user: null };
         
         this.init();
     }
 
     async init() {
+        this.restoreAuth();
         await this.loadDecks();
         await this.loadCards();
         this.setupEventListeners();
@@ -49,6 +51,15 @@ class AnkiApp {
                 menu.classList.remove('active');
             }
         });
+
+        // Login form
+        const loginForm = document.getElementById('loginForm');
+        if (loginForm) {
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.login();
+            });
+        }
     }
 
     setupImageUpload() {
@@ -298,7 +309,7 @@ class AnkiApp {
 
     async loadDecks() {
         try {
-            const response = await fetch('/api/decks');
+            const response = await fetch('/api/decks', { headers: this.authHeader() });
             const decks = await response.json();
             // Merge default options for any deck missing options
             this.decks = decks.map(d => ({
@@ -306,6 +317,7 @@ class AnkiApp {
                 options: { ...this.getDefaultDeckOptions(), ...(d.options || {}) }
             }));
             this.renderDecks();
+            this.updateAuthUi();
         } catch (error) {
             console.error('Failed to load decks:', error);
         }
@@ -313,7 +325,7 @@ class AnkiApp {
 
     async loadCards() {
         try {
-            const response = await fetch('/api/cards');
+            const response = await fetch('/api/cards', { headers: this.authHeader() });
             this.cards = await response.json();
         } catch (error) {
             console.error('Failed to load cards:', error);
@@ -339,16 +351,106 @@ class AnkiApp {
                     <div class=\"deck-name\">${deck.name}</div>
                     <div class=\"deck-count\">${cardCount} cards</div>
                 </div>
-                <button class="deck-kebab" title="Deck options" onclick="ankiApp.openDeckOptions(event, '${deck.id}')">⋯</button>
+                ${this.canAdmin() ? `<button class=\"deck-kebab\" title=\"Deck options\" onclick=\"ankiApp.openDeckOptions(event, '${deck.id}')\">⋯</button>` : ''}
             `;
             deckList.appendChild(deckItem);
 
             // Add to card form select
-            const option = document.createElement('option');
-            option.value = deck.id;
-            option.textContent = deck.name;
-            cardDeckSelect.appendChild(option);
+            if (cardDeckSelect) {
+                const option = document.createElement('option');
+                option.value = deck.id;
+                option.textContent = deck.name;
+                cardDeckSelect.appendChild(option);
+            }
         });
+    }
+
+    // Auth helpers
+    canAdmin() {
+        return this.auth && this.auth.user && this.auth.user.role === 'admin';
+    }
+
+    authHeader() {
+        const headers = {};
+        if (this.auth && this.auth.token) headers['x-auth-token'] = this.auth.token;
+        return headers;
+    }
+
+    saveAuth(token, user) {
+        this.auth = { token, user };
+        try { localStorage.setItem('ankiAuth', JSON.stringify(this.auth)); } catch (e) {}
+    }
+
+    restoreAuth() {
+        try {
+            const raw = localStorage.getItem('ankiAuth');
+            if (raw) this.auth = JSON.parse(raw);
+        } catch (e) {}
+    }
+
+    clearAuth() {
+        this.auth = { token: null, user: null };
+        try { localStorage.removeItem('ankiAuth'); } catch (e) {}
+    }
+
+    updateAuthUi() {
+        const roleSpan = document.getElementById('accountRole');
+        const loginBtn = document.getElementById('loginBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const addDeckBtn = document.getElementById('addDeckButton');
+        const addCardBtn = document.querySelector('.add-card-btn');
+        if (this.auth && this.auth.user) {
+            if (roleSpan) roleSpan.textContent = this.auth.user.role === 'admin' ? 'Admin' : 'User';
+            if (loginBtn) loginBtn.classList.add('hidden');
+            if (logoutBtn) logoutBtn.classList.remove('hidden');
+            if (addDeckBtn) addDeckBtn.disabled = !this.canAdmin();
+            if (addDeckBtn) addDeckBtn.style.display = this.canAdmin() ? 'block' : 'none';
+            if (addCardBtn) addCardBtn.style.display = this.canAdmin() ? 'inline-block' : 'none';
+        } else {
+            if (roleSpan) roleSpan.textContent = 'Guest';
+            if (loginBtn) loginBtn.classList.remove('hidden');
+            if (logoutBtn) logoutBtn.classList.add('hidden');
+            if (addDeckBtn) { addDeckBtn.disabled = true; addDeckBtn.style.display = 'none'; }
+            if (addCardBtn) addCardBtn.style.display = 'none';
+        }
+    }
+
+    showLoginModal() {
+        document.getElementById('loginModal').style.display = 'block';
+    }
+
+    async login() {
+        const username = document.getElementById('loginUsername').value;
+        const password = document.getElementById('loginPassword').value;
+        try {
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            if (!res.ok) {
+                const t = await res.text();
+                alert('Login failed: ' + t);
+                return;
+            }
+            const data = await res.json();
+            this.saveAuth(data.token, data.user);
+            closeModal('loginModal');
+            await this.loadDecks();
+            await this.loadCards();
+            this.updateAuthUi();
+            this.showWelcomeView();
+        } catch (e) {
+            console.error('Login failed', e);
+            alert('Login failed');
+        }
+    }
+
+    async logout() {
+        try { await fetch('/api/logout', { method: 'POST', headers: this.authHeader() }); } catch (e) {}
+        this.clearAuth();
+        this.updateAuthUi();
+        this.showWelcomeView();
     }
 
     getDefaultDeckOptions() {
