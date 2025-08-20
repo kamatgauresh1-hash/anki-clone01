@@ -115,7 +115,11 @@ const initializeData = () => {
         hardIntervalPercent: 120,
         intervalModifierPercent: 100,
         maximumIntervalDays: 36500,
-        buryRelatedReviews: true
+        buryRelatedReviews: true,
+        lapseStepsMinutes: [1440],
+        newIntervalPercent: 20,
+        minimumIntervalDays: 1,
+        leechThreshold: 4
       }
     });
   }
@@ -147,7 +151,11 @@ app.post('/api/decks', (req, res) => {
       hardIntervalPercent: 120,
       intervalModifierPercent: 100,
       maximumIntervalDays: 36500,
-      buryRelatedReviews: true
+      buryRelatedReviews: true,
+      lapseStepsMinutes: [1440],
+      newIntervalPercent: 20,
+      minimumIntervalDays: 1,
+      leechThreshold: 4
     }
   };
   console.log('Creating new deck:', newDeck);
@@ -235,30 +243,98 @@ app.post('/api/cards/:id/review', (req, res) => {
   if (card.sm2.repetitions === 0 && steps.length > 0) {
     const now = Date.now();
     const currentStepIndex = Number.isInteger(card.learningStepIndex) ? card.learningStepIndex : 0;
-    if (quality < 3) {
-      // Repeat first step
+    if (quality === 0) {
+      // Again -> first step
       const minutes = steps[0];
       card.learningStepIndex = 0;
       card.lastReviewed = new Date().toISOString();
       card.nextReview = new Date(now + minutes * 60 * 1000);
-      return res.json({
-        card,
-        sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) }
-      });
+      return res.json({ card, sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) } });
     }
-    // quality >= 3 (Good/Easy) progress through steps if any remain
-    if (currentStepIndex < steps.length - 1) {
-      const nextIndex = currentStepIndex + 1;
-      const minutes = steps[nextIndex];
-      card.learningStepIndex = nextIndex;
+    if (quality === 1) {
+      // Hard -> halfway to next step (e.g., 12h if next step is 1 day)
+      if (currentStepIndex < steps.length - 1) {
+        const nextIndex = currentStepIndex + 1;
+        const halfToNext = Math.round(steps[nextIndex] / 2);
+        const minutes = Math.max(steps[currentStepIndex], halfToNext);
+        // Don't advance step index on hard; keep practicing current block
+        card.learningStepIndex = currentStepIndex;
+        card.lastReviewed = new Date().toISOString();
+        card.nextReview = new Date(now + minutes * 60 * 1000);
+        return res.json({ card, sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) } });
+      } else {
+        // No next step: repeat current step with hard interval percent if available, else same step
+        const baseMin = steps[currentStepIndex];
+        const hardPct = opts && typeof opts.hardIntervalPercent === 'number' ? opts.hardIntervalPercent : 120;
+        const minutes = Math.max(baseMin, Math.round(baseMin * (hardPct / 100)));
+        card.learningStepIndex = currentStepIndex;
+        card.lastReviewed = new Date().toISOString();
+        card.nextReview = new Date(now + minutes * 60 * 1000);
+        return res.json({ card, sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) } });
+      }
+    }
+    if (quality === 3) {
+      // Good -> next step if available; else graduate to graduating interval
+      if (currentStepIndex < steps.length - 1) {
+        const nextIndex = currentStepIndex + 1;
+        const minutes = steps[nextIndex];
+        card.learningStepIndex = nextIndex;
+        card.lastReviewed = new Date().toISOString();
+        card.nextReview = new Date(now + minutes * 60 * 1000);
+        return res.json({ card, sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) } });
+      } else {
+        const gradDays = (opts && typeof opts.graduatingIntervalDays === 'number') ? Math.max(1, Math.round(opts.graduatingIntervalDays)) : 3;
+        card.learningStepIndex = null;
+        card.sm2.repetitions = 1; // graduate
+        card.sm2.interval = gradDays;
+        card.lastReviewed = new Date().toISOString();
+        card.nextReview = new Date(now + gradDays * 24 * 60 * 60 * 1000);
+        return res.json({ card, sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: gradDays } });
+      }
+    }
+    if (quality === 5) {
+      // Easy -> graduate immediately to easy interval
+      const easyDays = (opts && typeof opts.easyIntervalDays === 'number') ? Math.max(1, Math.round(opts.easyIntervalDays)) : 4;
+      card.learningStepIndex = null;
+      card.sm2.repetitions = 1;
+      card.sm2.interval = easyDays;
       card.lastReviewed = new Date().toISOString();
-      card.nextReview = new Date(now + minutes * 60 * 1000);
-      return res.json({
-        card,
-        sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) }
-      });
+      card.nextReview = new Date(now + easyDays * 24 * 60 * 60 * 1000);
+      return res.json({ card, sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: easyDays } });
     }
-    // Finished steps → graduate below using SM2 with deck-specific first intervals
+    // For any other quality, fall through to SM2
+  }
+
+  // Handle lapses for mature cards: send to lapse steps when quality < 3
+  const lapseSteps = (opts && Array.isArray(opts.lapseStepsMinutes) && opts.lapseStepsMinutes.length > 0)
+    ? opts.lapseStepsMinutes
+    : [];
+  if (quality < 3 && card.sm2.repetitions > 0 && lapseSteps.length > 0) {
+    const now = Date.now();
+    const minutes = lapseSteps[0];
+    // Optional: leech handling by counting lapses
+    card.lapses = (card.lapses || 0) + 1;
+    if (opts && typeof opts.leechThreshold === 'number' && card.lapses >= opts.leechThreshold) {
+      // For simplicity, bookmark as a proxy for flagging leech
+      card.bookmarked = true;
+    }
+    card.learningStepIndex = 0; // enter lapse learning
+    card.sm2.repetitions = 0;   // reset reps to re-graduate
+    // Reduce interval by new interval percent
+    if (typeof opts.newIntervalPercent === 'number') {
+      const reduced = Math.max(1, Math.round(card.sm2.interval * (opts.newIntervalPercent / 100)));
+      card.sm2.interval = reduced;
+    }
+    // Minimum interval clamp (applies after coming back from lapse graduation)
+    if (typeof opts.minimumIntervalDays === 'number') {
+      card.sm2.interval = Math.max(card.sm2.interval, Math.round(opts.minimumIntervalDays));
+    }
+    card.lastReviewed = new Date().toISOString();
+    card.nextReview = new Date(now + minutes * 60 * 1000);
+    return res.json({
+      card,
+      sm2Result: { ...card.sm2, nextReview: card.nextReview, interval: (minutes / 1440) }
+    });
   }
 
   const preRepetitions = card.sm2.repetitions;

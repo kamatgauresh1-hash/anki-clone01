@@ -941,6 +941,28 @@
                     <input type="checkbox" id="buryRelatedReviews" checked>
                     <label for="buryRelatedReviews" style="margin:0;">Bury related reviews</label>
                 </div>
+                <hr style="margin: 16px 0; border: none; border-top: 1px solid #e9ecef;">
+                <h4 style="margin-bottom: 8px; color:#495057;">Lapses</h4>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="lapseStepsMinutes">Steps (minutes, comma-separated)</label>
+                        <input type="text" id="lapseStepsMinutes" placeholder="1440" value="1440">
+                    </div>
+                    <div class="form-group">
+                        <label for="newIntervalPercent">New interval (%)</label>
+                        <input type="number" id="newIntervalPercent" min="0" max="100" value="20">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="minimumIntervalDays">Minimum interval (days)</label>
+                        <input type="number" id="minimumIntervalDays" min="1" value="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="leechThreshold">Leech threshold (lapses)</label>
+                        <input type="number" id="leechThreshold" min="1" value="4">
+                    </div>
+                </div>
                 <div style="text-align: right;">
                     <button type="button" class="btn btn-secondary" onclick="closeModal('deckOptionsModal')">Cancel</button>
                     <button type="submit" class="btn btn-primary">Save</button>

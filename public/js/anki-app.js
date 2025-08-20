@@ -299,7 +299,12 @@ class AnkiApp {
     async loadDecks() {
         try {
             const response = await fetch('/api/decks');
-            this.decks = await response.json();
+            const decks = await response.json();
+            // Merge default options for any deck missing options
+            this.decks = decks.map(d => ({
+                ...d,
+                options: { ...this.getDefaultDeckOptions(), ...(d.options || {}) }
+            }));
             this.renderDecks();
         } catch (error) {
             console.error('Failed to load decks:', error);
@@ -346,6 +351,27 @@ class AnkiApp {
         });
     }
 
+    getDefaultDeckOptions() {
+        return {
+            newCardsPerDay: 20,
+            maxReviewsPerDay: 200,
+            newOrder: 'added',
+            learningStepsMinutes: [25, 1440],
+            graduatingIntervalDays: 3,
+            easyIntervalDays: 4,
+            startingEasePercent: 250,
+            easyBonusPercent: 150,
+            hardIntervalPercent: 120,
+            intervalModifierPercent: 100,
+            maximumIntervalDays: 36500,
+            buryRelatedReviews: true,
+            lapseStepsMinutes: [1440],
+            newIntervalPercent: 20,
+            minimumIntervalDays: 1,
+            leechThreshold: 4
+        };
+    }
+
     selectDeckById(deckId, event) {
         const deck = this.decks.find(d => d.id === deckId);
         if (deck) this.selectDeck(deck, event);
@@ -372,6 +398,10 @@ class AnkiApp {
         document.getElementById('intervalModifierPercent').value = (opts.intervalModifierPercent ?? 100);
         document.getElementById('maximumIntervalDays').value = (opts.maximumIntervalDays ?? 36500);
         document.getElementById('buryRelatedReviews').checked = (typeof opts.buryRelatedReviews === 'boolean') ? opts.buryRelatedReviews : true;
+        document.getElementById('lapseStepsMinutes').value = (opts.lapseStepsMinutes && Array.isArray(opts.lapseStepsMinutes)) ? opts.lapseStepsMinutes.join(',') : '1440';
+        document.getElementById('newIntervalPercent').value = (opts.newIntervalPercent ?? 20);
+        document.getElementById('minimumIntervalDays').value = (opts.minimumIntervalDays ?? 1);
+        document.getElementById('leechThreshold').value = (opts.leechThreshold ?? 4);
         document.getElementById('deckOptionsModal').style.display = 'block';
         // Attach handler once
         const form = document.getElementById('deckOptionsForm');
@@ -406,7 +436,7 @@ class AnkiApp {
                 body: JSON.stringify({
                     name,
                     description,
-                    options: { newCardsPerDay, maxReviewsPerDay, newOrder, learningStepsMinutes, graduatingIntervalDays, easyIntervalDays, startingEasePercent, easyBonusPercent, hardIntervalPercent, intervalModifierPercent, maximumIntervalDays, buryRelatedReviews }
+                    options: { newCardsPerDay, maxReviewsPerDay, newOrder, learningStepsMinutes, graduatingIntervalDays, easyIntervalDays, startingEasePercent, easyBonusPercent, hardIntervalPercent, intervalModifierPercent, maximumIntervalDays, buryRelatedReviews, lapseStepsMinutes: (document.getElementById('lapseStepsMinutes').value || '').split(',').map(s=>parseInt(s.trim(),10)).filter(n=>!Number.isNaN(n) && n>0), newIntervalPercent, minimumIntervalDays, leechThreshold }
                 })
             });
             if (res.ok) {
@@ -492,8 +522,8 @@ class AnkiApp {
 
     renderCardItem(card) {
         const cardTypeClass = card.type === 'image-occlusion' ? 'image-occlusion' : '';
-        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
-        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
+        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleString() : 'Never';
+        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleString() : 'Due now';
 
         return `
             <div class="card-item">
@@ -1042,19 +1072,67 @@ class AnkiApp {
         
         const currentCard = this.studyCards && this.studyCards[this.currentCardIndex];
         if (!currentCard || !currentCard.sm2) return;
-        
-        const sm2State = { ...currentCard.sm2 };
-        
         const againBtn = qualityButtons.querySelector('.quality-btn.again');
         const hardBtn = qualityButtons.querySelector('.quality-btn.hard');
         const goodBtn = qualityButtons.querySelector('.quality-btn.good');
         const easyBtn = qualityButtons.querySelector('.quality-btn.easy');
-        
+
+        const deckOpts = (this.currentDeck && this.currentDeck.options) || {};
+        let learningSteps = Array.isArray(deckOpts.learningStepsMinutes) ? deckOpts.learningStepsMinutes : [];
+        if (!learningSteps || learningSteps.length === 0) {
+            learningSteps = [25, 1440];
+        }
+        const isLearning = (currentCard.sm2.repetitions === 0) || (typeof currentCard.learningStepIndex === 'number');
+
+        const formatMinutes = (m) => {
+            if (m >= 1440) {
+                const days = Math.round(m / 1440);
+                return days === 1 ? '1 day' : `${days} days`;
+            } else if (m >= 60) {
+                const hours = Math.round(m / 60);
+                return hours === 1 ? '1 hour' : `${hours} hours`;
+            }
+            return `${Math.max(1, Math.round(m))} min`;
+        };
+
+        if (isLearning && learningSteps.length > 0) {
+            const idx = typeof currentCard.learningStepIndex === 'number' ? currentCard.learningStepIndex : 0;
+            const first = learningSteps[0];
+            const nextIdx = Math.min(idx + 1, learningSteps.length - 1);
+            const nextMinutes = learningSteps[nextIdx];
+
+            // Again -> first step
+            if (againBtn) againBtn.textContent = `Again (${formatMinutes(first)})`;
+            // Hard -> roughly half of next step if available; otherwise repeat/scale current step
+            let hardMinutes;
+            if (learningSteps.length > 1 && nextIdx !== idx) {
+                hardMinutes = Math.max(learningSteps[idx], Math.round(nextMinutes / 2));
+            } else {
+                const hardPct = deckOpts.hardIntervalPercent ?? 120;
+                const base = learningSteps[idx] || first;
+                hardMinutes = Math.max(base, Math.round(base * (hardPct / 100)));
+            }
+            if (hardBtn) hardBtn.textContent = `Hard (${formatMinutes(hardMinutes)})`;
+            // Good -> next step or graduate
+            if (idx < learningSteps.length - 1) {
+                if (goodBtn) goodBtn.textContent = `Good (${formatMinutes(nextMinutes)})`;
+            } else {
+                const gradDays = deckOpts.graduatingIntervalDays ?? 3;
+                if (goodBtn) goodBtn.textContent = `Good (${this.formatIntervalDays(gradDays)})`;
+            }
+            // Easy -> graduate immediately to easy interval
+            const easyDays = deckOpts.easyIntervalDays ?? 4;
+            if (easyBtn) easyBtn.textContent = `Easy (${this.formatIntervalDays(easyDays)})`;
+            return;
+        }
+
+        // Default: show SM2-based predictions (approximate)
+        const sm2State = { ...currentCard.sm2 };
         const again = this.simulateSm2Next(sm2State, 0);
-        const hard = this.simulateSm2Next(sm2State, 1);
-        const good = this.simulateSm2Next(sm2State, 3);
-        const easy = this.simulateSm2Next(sm2State, 5);
-        
+        const hard = this.simulateSm2Next({ ...currentCard.sm2 }, 1);
+        const good = this.simulateSm2Next({ ...currentCard.sm2 }, 3);
+        const easy = this.simulateSm2Next({ ...currentCard.sm2 }, 5);
+
         if (againBtn) againBtn.textContent = `Again (${this.formatIntervalDays(again.interval)})`;
         if (hardBtn) hardBtn.textContent = `Hard (${this.formatIntervalDays(hard.interval)})`;
         if (goodBtn) goodBtn.textContent = `Good (${this.formatIntervalDays(good.interval)})`;
@@ -1171,8 +1249,8 @@ class AnkiApp {
 
     renderBrowserCardItem(card, index) {
         const cardTypeClass = card.type === 'image-occlusion' ? 'image-occlusion' : '';
-        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
-        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
+        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleString() : 'Never';
+        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleString() : 'Due now';
         const isSelected = this.selectedCardId === card.id ? 'selected' : '';
         const isChecked = this.selectedCardIds && this.selectedCardIds.has(card.id);
 
@@ -1355,8 +1433,8 @@ class AnkiApp {
         document.getElementById('contentTitle').textContent = `Card Details: ${card.front || 'Image Occlusion'}`;
         
         const cardTypeClass = card.type === 'image-occlusion' ? 'image-occlusion' : '';
-        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
-        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
+        const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleString() : 'Never';
+        const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleString() : 'Due now';
 
         let imageContent = '';
         if (card.imagePath) {
