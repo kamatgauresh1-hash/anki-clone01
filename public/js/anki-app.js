@@ -355,8 +355,10 @@ class AnkiApp {
             event.currentTarget.classList.add('active');
         }
 
-        // Show card browser
-        this.showCardBrowser();
+        // Ensure the card browser is closed so only the deck view shows
+        if (this.cardBrowserActive) {
+            this.closeCardBrowser();
+        }
 
         // Update content
         document.getElementById('contentTitle').textContent = deck.name;
@@ -364,11 +366,6 @@ class AnkiApp {
     }
 
     showDeckView(deck) {
-        // Ensure card browser is shown
-        if (!this.cardBrowserActive) {
-            this.showCardBrowser();
-        }
-        
         const deckCards = this.cards.filter(card => card.deckId === deck.id);
         const mainContent = document.getElementById('mainContent');
 
@@ -378,22 +375,29 @@ class AnkiApp {
                     <i class="fas fa-inbox" style="font-size: 4rem; color: #dee2e6; margin-bottom: 20px;"></i>
                     <h3 style="color: #6c757d; margin-bottom: 15px;">No cards in this deck yet</h3>
                     <p style="color: #6c757d; margin-bottom: 30px;">Start by adding some cards to begin studying!</p>
-                    <button class="btn btn-primary" onclick="showAddCardModal()">
-                        <i class="fas fa-plus"></i> Add Your First Card
-                    </button>
+                    <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="showAddCardModal()">
+                            <i class="fas fa-plus"></i> Add Your First Card
+                        </button>
+                        <button class="btn btn-secondary" onclick="ankiApp.showCardBrowser()">
+                            <i class="fas fa-list"></i> Card Manager
+                        </button>
+                    </div>
                 </div>
             `;
         } else {
-            // Show cards grid
-            const cardsHtml = deckCards.map(card => this.renderCardItem(card)).join('');
             mainContent.innerHTML = `
-                <div class="card-grid">
-                    ${cardsHtml}
-                </div>
-                <div style="text-align: center;">
-                    <button class="btn btn-primary" onclick="ankiApp.startStudySession()">
-                        <i class="fas fa-play"></i> Start Study Session
-                    </button>
+                <div style="text-align: center; padding: 60px 20px;">
+                    <div style="margin-bottom:20px;">
+                        <button class="btn btn-primary" onclick="ankiApp.startStudySession()">
+                            <i class="fas fa-play"></i> Study Now
+                        </button>
+                    </div>
+                    <div>
+                        <button class="btn btn-secondary" onclick="ankiApp.showCardBrowser()">
+                            <i class="fas fa-list"></i> Card Manager
+                        </button>
+                    </div>
                 </div>
             `;
         }
@@ -1022,12 +1026,36 @@ class AnkiApp {
                 </div>
             `;
         } else {
-            const cardsHtml = filteredCards.map(card => this.renderBrowserCardItem(card)).join('');
+            // Group image-occlusion cards by imagePath (keep occlusion order) and number the entire list
+            const groups = new Map();
+            const nonImageCards = [];
+            filteredCards.forEach(card => {
+                if (card.type === 'image-occlusion' && card.imagePath) {
+                    const key = card.imagePath;
+                    if (!groups.has(key)) groups.set(key, []);
+                    groups.get(key).push(card);
+                } else {
+                    nonImageCards.push(card);
+                }
+            });
+            const orderedCards = [];
+            Array.from(groups.keys()).sort().forEach(key => {
+                const arr = groups.get(key);
+                arr.sort((a, b) => {
+                    const ai = (typeof a.occlusionIndex === 'number') ? a.occlusionIndex : 0;
+                    const bi = (typeof b.occlusionIndex === 'number') ? b.occlusionIndex : 0;
+                    return ai - bi;
+                });
+                orderedCards.push(...arr);
+            });
+            orderedCards.push(...nonImageCards);
+
+            const cardsHtml = orderedCards.map((card, idx) => this.renderBrowserCardItem(card, idx + 1)).join('');
             browserCardList.innerHTML = cardsHtml;
         }
     }
 
-    renderBrowserCardItem(card) {
+    renderBrowserCardItem(card, index) {
         const cardTypeClass = card.type === 'image-occlusion' ? 'image-occlusion' : '';
         const lastReviewed = card.lastReviewed ? new Date(card.lastReviewed).toLocaleDateString() : 'Never';
         const nextReview = card.nextReview ? new Date(card.nextReview).toLocaleDateString() : 'Due now';
@@ -1049,6 +1077,7 @@ class AnkiApp {
                 <div style="display:flex; align-items:center; justify-content:space-between;">
                     <div style="display:flex; align-items:center;">
                         ${selectionCheckbox}
+                        <span style="min-width:28px; display:inline-block; color:#6c757d;">${index ? index + '.' : ''}</span>
                         <div class="browser-card-front">${card.front || 'Image Occlusion Card'}</div>
                     </div>
                     ${bookmarkBtn}
